@@ -6,17 +6,27 @@ Windows,电脑端把它识别成 **DualShock 4 (USB 有线)** 手柄:
 ```
 Switch 2 Pro ──BLE(免配对私有协议)──> Pico 2 W ──USB(TinyUSB HID)──> Windows
                                         │
-                                        ├─ 伪装 Sony 054c:09cc (DS4 CUH-ZCT2)
-                                        ├─ DS4Windows / Steam 直接识别 → XInput 全游戏
-                                        └─ 键位自动从任天堂布局换算为 Xbox 布局
+                                        ├─ 默认人格: 任天堂 Switch Pro (057e:2009)
+                                        │    → Steam 原生识别,显示与手柄丝印一致的 ABXY 提示
+                                        │    → BetterJoy / 加进 Steam 转 XInput
+                                        └─ 备用人格: Sony DS4 (054c:09cc)
+                                             → DS4Windows / Steam 识别(PS 图形提示)
 ```
 
-v0.1 范围(最小闭环):按键、摇杆(含闪存校准)、电池电压、自动重连。
+v0.2:按键、摇杆(含闪存校准)、电池电压、自动重连、BOOTSEL 长按切换人格。
 路线图:震动回传 → 陀螺仪/加速计透传(Steam 体感)→ 耳机口 USB 声卡。
+
+## 人格切换(为什么要两个)
+
+Switch 2 Pro 的丝印是任天堂布局(右=A,下=B)。伪装成 DS4 时游戏显示 PS 图形,
+与丝印对不上;伪装成 **Switch Pro v1** 时 Steam/支持 Steam Input API 的游戏直接显示
+**与手柄完全一致的 ABXY 提示** —— 这是默认人格。按住板载 BOOTSEL ≥1.5 秒切换
+到 DS4 人格(USB 重新枚举),再按一次切回。
 
 ## 状态
 
 - [x] 固件编译通过(`build/sw2bridge.uf2`)
+- [x] 双人格:Switch Pro v1(默认)+ DS4,BOOTSEL 长按切换
 - [ ] **上板联调(等板子到货)** — 见 `docs/BRINGUP.md`
 - [ ] Pro 手柄 BLE 初始化序列实机验证(目前依据 Joy-Con 2 已验证序列外推,详见 BRINGUP 风险清单)
 - [ ] 震动 / 体感 / 音频(v2+)
@@ -37,8 +47,9 @@ firmware/          Pico 2 W 固件 (C, pico-sdk 2.3.0 + BTstack + TinyUSB)
   sw2_ble.c/.h       BLE central 状态机: 扫描→连接→初始化序列→订阅报告
   sw2_protocol.h     协议常量(全部来自 PROTOCOL.md / Valve 驱动)
   sw2_decode.c/.h    公共报告 0x05 / Pro 原生报告 0x09 解析 + 摇杆校准
-  ds4.c/.h           Switch2 状态 → DS4 报告编码(含 A/B、X/Y 布局对换)
-  usb_descriptors.c  DS4 设备描述符 + CDC(日志)+ HID 复合
+  pro.c/.h           Switch Pro v1 人格: 0x30 报告编码(默认)
+  ds4.c/.h           DS4 人格: 报告编码(含 A/B、X/Y 布局对换)
+  usb_descriptors.c  双人格设备/HID/字符串描述符 + CDC(日志)复合
   btstack_config.h / tusb_config.h
 refs/              参考实现(git 忽略,本地保留)
   linux-switch2/     社区驱动 + PROTOCOL.md ★协议唯一权威来源

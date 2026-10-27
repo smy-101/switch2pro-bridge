@@ -18,6 +18,7 @@ add_executable(sw2bridge
     sw2_ble.c
     sw2_decode.c
     ds4.c
+    pro.c
 )
 
 target_include_directories(sw2bridge PRIVATE ${CMAKE_CURRENT_LIST_DIR})
@@ -28,6 +29,7 @@ target_link_libraries(sw2bridge
     pico_btstack_ble
     pico_btstack_cyw43
     pico_btstack_run_loop_async_context
+    pico_flash
     hardware_watchdog
     tinyusb_device
     tinyusb_board

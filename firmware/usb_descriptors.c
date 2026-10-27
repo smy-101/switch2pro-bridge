@@ -1,14 +1,46 @@
 #include "tusb.h"
 #include "usb_descriptors.h"
+#include <string.h>
 
 //--------------------------------------------------------------------
-// Device descriptor
+// Host persona selection. Default: Switch Pro v1 (Steam shows native
+// ABXY glyphs matching the physical controller). DS4 kept for
+// DS4Windows-centric setups.
 //--------------------------------------------------------------------
-tusb_desc_device_t const desc_device = {
+static usb_persona_t persona = USB_PERSONA_PRO;
+
+usb_persona_t usb_persona_get(void) { return persona; }
+const char *usb_persona_name(void) {
+    return persona == USB_PERSONA_PRO ? "switch-pro" : "ds4";
+}
+void usb_persona_toggle(void) {
+    persona = (persona == USB_PERSONA_PRO) ? USB_PERSONA_DS4 : USB_PERSONA_PRO;
+}
+
+//--------------------------------------------------------------------
+// Device descriptors (one per persona)
+//--------------------------------------------------------------------
+static const tusb_desc_device_t desc_device_pro = {
     .bLength            = sizeof(tusb_desc_device_t),
     .bDescriptorType    = TUSB_DESC_DEVICE,
     .bcdUSB             = 0x0200,
-    // Composite with IAD (CDC + HID)
+    .bDeviceClass       = TUSB_CLASS_MISC,      // composite CDC+HID (IAD)
+    .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol    = MISC_PROTOCOL_IAD,
+    .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
+    .idVendor           = 0x057e,               // Nintendo
+    .idProduct          = 0x2009,               // Pro Controller (wired)
+    .bcdDevice          = 0x0210,               // matches real hardware dump
+    .iManufacturer      = 0x01,
+    .iProduct           = 0x02,
+    .iSerialNumber      = 0x03,
+    .bNumConfigurations = 0x01,
+};
+
+static const tusb_desc_device_t desc_device_ds4 = {
+    .bLength            = sizeof(tusb_desc_device_t),
+    .bDescriptorType    = TUSB_DESC_DEVICE,
+    .bcdUSB             = 0x0200,
     .bDeviceClass       = TUSB_CLASS_MISC,
     .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
     .bDeviceProtocol    = MISC_PROTOCOL_IAD,
@@ -23,14 +55,15 @@ tusb_desc_device_t const desc_device = {
 };
 
 uint8_t const *tud_descriptor_device_cb(void) {
-    return (uint8_t const *)&desc_device;
+    return (uint8_t const *)(persona == USB_PERSONA_PRO ? &desc_device_pro : &desc_device_ds4);
 }
 
 //--------------------------------------------------------------------
-// HID report descriptor — DualShock 4.
-// Bytes copied from DS5_Bridge (AGPL-3.0, github.com/SundayMoments/DS5_Bridge,
-// src/usb_descriptors.c desc_hid_report_ds4), verified against DS4Windows.
+// HID report descriptors
 //--------------------------------------------------------------------
+// DualShock 4 — bytes from DS5_Bridge (AGPL-3.0,
+// github.com/SundayMoments/DS5_Bridge src/usb_descriptors.c), verified
+// against DS4Windows.
 uint8_t const desc_hid_report_ds4[] = {
     0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01, 0x09, 0x30, 0x09, 0x31,
     0x09, 0x32, 0x09, 0x35, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75,
@@ -77,16 +110,76 @@ uint8_t const desc_hid_report_ds4[] = {
     0x95, 0x3f, 0xb1, 0x02, 0xc0
 };
 
+// Switch Pro (v1) — real hardware report descriptor dump
+// (gist.github.com/spacemeowx2/22171913a36721501e42f14f1fd81633).
+// Note: the gist paste dropped the hat-switch item bytes "0x81, 0x42"
+// (comment survived, bytes missing); restored here by structural analogy
+// with the DS4 descriptor (4-bit hat with null state followed by 4 button
+// bits — required to fill the byte between axes and the 0x0F..0x12 buttons).
+uint8_t const desc_hid_report_pro[] = {
+    0x05, 0x01,             // Usage Page (Generic Desktop)
+    0x15, 0x00,             // Logical Minimum (0)
+    0x09, 0x04,             // Usage (Joystick)
+    0xA1, 0x01,             // Collection (Application)
+    0x85, 0x30,             //   Report ID (48)
+    0x05, 0x01,             //   Usage Page (Generic Desktop)
+    0x05, 0x09,             //   Usage Page (Button)
+    0x19, 0x01, 0x29, 0x0A, //   Usage Min/Max (1..10)
+    0x15, 0x00, 0x25, 0x01, //   Logical 0..1
+    0x75, 0x01, 0x95, 0x0A, //   1 bit x10
+    0x55, 0x00, 0x65, 0x00,
+    0x81, 0x02,             //   Input
+    0x05, 0x09,
+    0x19, 0x0B, 0x29, 0x0E, //   Usage 11..14
+    0x15, 0x00, 0x25, 0x01,
+    0x75, 0x01, 0x95, 0x04, //   1 bit x4
+    0x81, 0x02,
+    0x75, 0x01, 0x95, 0x02, //   2 const bits
+    0x81, 0x03,
+    0x0B, 0x01, 0x00, 0x01, 0x00, // Usage (0x010001)
+    0xA1, 0x00,             //   Collection (Physical)
+    0x0B, 0x30, 0x00, 0x01, 0x00, // X
+    0x0B, 0x31, 0x00, 0x01, 0x00, // Y
+    0x0B, 0x32, 0x00, 0x01, 0x00, // Z
+    0x0B, 0x35, 0x00, 0x01, 0x00, // Rz
+    0x15, 0x00,
+    0x27, 0xFF, 0xFF, 0x00, 0x00, // Logical Max 65534
+    0x75, 0x10, 0x95, 0x04, //   16-bit x4
+    0x81, 0x02,
+    0xC0,                   //   End Collection
+    0x0B, 0x39, 0x00, 0x01, 0x00, // Hat switch
+    0x15, 0x00, 0x25, 0x07,
+    0x35, 0x00, 0x46, 0x3B, 0x01,
+    0x65, 0x14,
+    0x75, 0x04, 0x95, 0x01, //   4-bit hat
+    0x81, 0x42,             //   Input (null state)  <-- restored item
+    0x05, 0x09,
+    0x19, 0x0F, 0x29, 0x12, //   Usage 15..18
+    0x15, 0x00, 0x25, 0x01,
+    0x75, 0x01, 0x95, 0x04, //   1 bit x4
+    0x81, 0x02,
+    0x75, 0x08, 0x95, 0x34, //   52 const bytes (vendor payload area)
+    0x81, 0x03,
+    0x06, 0x00, 0xFF,       //   Usage Page (Vendor 0xFF00)
+    0x85, 0x21, 0x09, 0x01, 0x75, 0x08, 0x95, 0x3F, 0x81, 0x03,
+    0x85, 0x81, 0x09, 0x02, 0x75, 0x08, 0x95, 0x3F, 0x81, 0x03,
+    0x85, 0x01, 0x09, 0x03, 0x75, 0x08, 0x95, 0x3F, 0x91, 0x83, // OUT 0x01
+    0x85, 0x10, 0x09, 0x04, 0x75, 0x08, 0x95, 0x3F, 0x91, 0x83, // OUT 0x10
+    0x85, 0x80, 0x09, 0x05, 0x75, 0x08, 0x95, 0x3F, 0x91, 0x83,
+    0x85, 0x82, 0x09, 0x06, 0x75, 0x08, 0x95, 0x3F, 0x91, 0x83,
+    0xC0,
+};
+
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
     (void)itf;
-    return desc_hid_report_ds4;
+    return persona == USB_PERSONA_PRO ? desc_hid_report_pro : desc_hid_report_ds4;
 }
 
 //--------------------------------------------------------------------
-// Configuration descriptor: CDC (logging) + HID (DS4)
-//   EP0: control
+// Configuration descriptor: CDC (logging) + HID IN/OUT (64-byte endpoints
+// so Switch Pro output reports 0x01/0x10 fit)
 //   EP 0x81 CDC notify | 0x02 CDC OUT | 0x82 CDC IN
-//   EP 0x83 HID IN (64) | 0x03 HID OUT (32)
+//   EP 0x83 HID IN     | 0x03 HID OUT
 //--------------------------------------------------------------------
 enum {
     ITF_NUM_CDC = 0,
@@ -104,29 +197,44 @@ enum {
 #define CONFIG_TOTAL_LEN \
     (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
 
-uint8_t const desc_fs_configuration[] = {
-    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN,
-                          0x00, 100),
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 0, EPNUM_CDC_NOTIF, 8,
-                       EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
-    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
-                             sizeof(desc_hid_report_ds4),
-                             EPNUM_HID_OUT, EPNUM_HID_IN, 64, 1),
-};
+// Built on demand: the embedded HID descriptor length depends on persona.
+static uint8_t desc_fs_configuration[CONFIG_TOTAL_LEN];
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void)index;
+    uint8_t *p = desc_fs_configuration;
+    memcpy(p, (uint8_t[]){TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0,
+                          CONFIG_TOTAL_LEN, 0x00, 100)},
+           TUD_CONFIG_DESC_LEN);
+    p += TUD_CONFIG_DESC_LEN;
+    memcpy(p, (uint8_t[]){TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 0, EPNUM_CDC_NOTIF, 8,
+                          EPNUM_CDC_OUT, EPNUM_CDC_IN, 64)},
+           TUD_CDC_DESC_LEN);
+    p += TUD_CDC_DESC_LEN;
+    memcpy(p, (uint8_t[]){TUD_HID_INOUT_DESCRIPTOR(
+                          ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
+                          persona == USB_PERSONA_PRO
+                              ? sizeof(desc_hid_report_pro)
+                              : sizeof(desc_hid_report_ds4),
+                          EPNUM_HID_OUT, EPNUM_HID_IN, 64, 1)},
+           TUD_HID_INOUT_DESC_LEN);
     return desc_fs_configuration;
 }
 
 //--------------------------------------------------------------------
-// String descriptors
+// String descriptors (per persona)
 //--------------------------------------------------------------------
-static char const *string_desc_arr[] = {
-    (const char[]){0x09, 0x04},    // 0: English (0x0409)
-    "Sony Interactive Entertainment", // 1: Manufacturer
-    "Wireless Controller",         // 2: Product
-    "1111020BF619A500",            // 3: Serial (DS4-style constant)
+static char const *strings_pro[] = {
+    (const char[]){0x09, 0x04},
+    "Nintendo Co., Ltd.",     // matches real hardware dump
+    "Pro Controller",
+    "000000000001",
+};
+static char const *strings_ds4[] = {
+    (const char[]){0x09, 0x04},
+    "Sony Interactive Entertainment",
+    "Wireless Controller",
+    "1111020BF619A500",
 };
 
 static uint16_t desc_str[32];
@@ -134,11 +242,12 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     (void)langid;
     uint8_t chr_count = 0;
     if (index == 0) {
-        memcpy(&desc_str[1], string_desc_arr[0], 2);
+        memcpy(&desc_str[1], strings_pro[0], 2);
         chr_count = 1;
     } else {
-        if (index >= sizeof(string_desc_arr) / sizeof(char const *)) return NULL;
-        const char *str = string_desc_arr[index];
+        char const *const *arr = persona == USB_PERSONA_PRO ? strings_pro : strings_ds4;
+        if (index >= 4) return NULL;
+        const char *str = arr[index];
         chr_count = (uint8_t)strlen(str);
         if (chr_count > 31) chr_count = 31;
         for (uint8_t i = 0; i < chr_count; i++) {
@@ -150,3 +259,10 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 }
 
 void usb_descriptors_init(void) {}
+
+// Re-enumerate with the current persona (call after toggling).
+void usb_reenumerate(void) {
+    tud_disconnect();
+    sleep_ms(150);
+    tud_connect();
+}
