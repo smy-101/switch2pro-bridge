@@ -1,0 +1,4 @@
+build*/
+pico-sdk/
+refs/
+*.uf2
