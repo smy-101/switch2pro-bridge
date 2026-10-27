@@ -1,0 +1,71 @@
+# sw2bridge — Switch 2 Pro Controller → DualShock 4 无线桥
+
+让 **Nintendo Switch 2 Pro 手柄**通过一块 **Raspberry Pi Pico 2 W** 以无线(BLE)方式连到
+Windows,电脑端把它识别成 **DualShock 4 (USB 有线)** 手柄:
+
+```
+Switch 2 Pro ──BLE(免配对私有协议)──> Pico 2 W ──USB(TinyUSB HID)──> Windows
+                                        │
+                                        ├─ 伪装 Sony 054c:09cc (DS4 CUH-ZCT2)
+                                        ├─ DS4Windows / Steam 直接识别 → XInput 全游戏
+                                        └─ 键位自动从任天堂布局换算为 Xbox 布局
+```
+
+v0.1 范围(最小闭环):按键、摇杆(含闪存校准)、电池电压、自动重连。
+路线图:震动回传 → 陀螺仪/加速计透传(Steam 体感)→ 耳机口 USB 声卡。
+
+## 状态
+
+- [x] 固件编译通过(`build/sw2bridge.uf2`)
+- [ ] **上板联调(等板子到货)** — 见 `docs/BRINGUP.md`
+- [ ] Pro 手柄 BLE 初始化序列实机验证(目前依据 Joy-Con 2 已验证序列外推,详见 BRINGUP 风险清单)
+- [ ] 震动 / 体感 / 音频(v2+)
+
+## 为什么可行
+
+- Switch 2 手柄走 **BLE 私有协议**,且**不需要标准蓝牙配对**(扫描→连接→GATT 即用)
+- 协议已被完整逆向:`refs/linux-switch2/PROTOCOL.md`(GATT 属性表、初始化序列、报告格式)
+- Valve 已把驱动合入 Linux 7.4 主线(`refs/hid-nintendo-valve.c`),含 Pro 按键映射
+- USB 侧人格化伪装参考了 [DS5_Bridge](https://github.com/SundayMoments/DS5_Bridge)(AGPL-3.0;
+  本仓库复用了其 DS4 HID report descriptor 字节,故衍生部分同样受 AGPL 约束)
+
+## 目录
+
+```
+firmware/          Pico 2 W 固件 (C, pico-sdk 2.3.0 + BTstack + TinyUSB)
+  main.c             主循环: TinyUSB / 看门狗 / LED / 报告泵
+  sw2_ble.c/.h       BLE central 状态机: 扫描→连接→初始化序列→订阅报告
+  sw2_protocol.h     协议常量(全部来自 PROTOCOL.md / Valve 驱动)
+  sw2_decode.c/.h    公共报告 0x05 / Pro 原生报告 0x09 解析 + 摇杆校准
+  ds4.c/.h           Switch2 状态 → DS4 报告编码(含 A/B、X/Y 布局对换)
+  usb_descriptors.c  DS4 设备描述符 + CDC(日志)+ HID 复合
+  btstack_config.h / tusb_config.h
+refs/              参考实现(git 忽略,本地保留)
+  linux-switch2/     社区驱动 + PROTOCOL.md ★协议唯一权威来源
+  hid-nintendo-valve.c  Valve 主线内核驱动(Pro 映射/USB 侧)
+  DS5_Bridge/        Pico 2 W DS4/DualSense 桥(AGPL,输出侧参考)
+docs/BRINGUP.md    到板联调手册(必读)
+build.sh           WSL 一键构建
+```
+
+## 构建(WSL)
+
+```bash
+./build.sh          # 首次自动用 pico-sdk/, 工具链在 ~/tools/
+# 产物: build/sw2bridge.uf2
+```
+
+烧录:按住 Pico 2 W 的 BOOTSEL 插入 USB → 把 `build/sw2bridge.uf2` 拖进弹出的盘符。
+WSL 内产物路径可用 `\\wsl.localhost\<distro>\home\smy-101\workspace\self\switch2pro-bridge\build\sw2bridge.uf2`
+从 Windows 资源管理器直接访问。
+
+## 联机调试
+
+固件内置 USB CDC 日志(8KB 环形缓冲,IRQ 安全)。上电即输出:
+扫描/连接/21 步初始化序列/校准/订阅全过程。用任意串口终端打开对应 COM 口即可。
+日志是联调的第一手数据 —— **任何失败步骤,把日志带回来分析**(必要时配合 REA 抓包)。
+
+## 许可
+
+- 本仓库代码:与借用部分兼容地按 **AGPL-3.0** 发布(DS4 descriptor 来自 DS5_Bridge)
+- 协议事实不受版权保护,来源均在 refs/ 与上文链接中注明
