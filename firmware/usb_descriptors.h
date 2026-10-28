@@ -12,6 +12,7 @@ typedef enum {
 usb_persona_t usb_persona_get(void);
 const char *usb_persona_name(void);
 void usb_persona_toggle(void);   // then call usb_reenumerate()
+void usb_persona_set(usb_persona_t p);  // clamp + apply (boot / config load)
 
 // Sony DS4 identity constants (kept for reference in logs/tests)
 #define USB_VID_SONY_DS4   0x054c

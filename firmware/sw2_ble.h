@@ -11,4 +11,8 @@ const char *sw2_ble_state_name(void);
 uint16_t sw2_ble_peer_pid(void);
 bool sw2_ble_use_native_reports(void);
 
+// Vendor status channel (cmd.h report 0xF9).
+uint8_t sw2_ble_state_code(void);               // 0 off .. 6 streaming
+bool sw2_ble_battery(uint16_t *mv, uint8_t *charging);  // false = no report yet
+
 #endif

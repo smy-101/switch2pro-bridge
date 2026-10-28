@@ -14,6 +14,8 @@ pico_sdk_init()
 add_executable(sw2bridge
     main.c
     log.c
+    config.c
+    cmd.c
     usb_descriptors.c
     sw2_ble.c
     sw2_decode.c

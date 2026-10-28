@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sw2bridge 配置</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 15px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #0f1420; color: #dbe2ef; padding: 24px 16px 64px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h1 small { font-weight: 400; color: #7b8494; font-size: 13px; margin-left: 8px; }
+  h2 { font-size: 15px; margin: 28px 0 10px; color: #9fb0c8;
+       border-bottom: 1px solid #232c3e; padding-bottom: 6px; }
+  .banner { padding: 10px 14px; border-radius: 8px; margin: 14px 0; font-size: 14px; }
+  .banner.ok   { background: #12321f; color: #7ee2a8; border: 1px solid #1d5c3a; }
+  .banner.warn { background: #33270f; color: #ffd479; border: 1px solid #5c481d; }
+  .banner.err  { background: #351419; color: #ff8f9a; border: 1px solid #5c1f29; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  button {
+    font: inherit; padding: 8px 18px; border-radius: 8px; cursor: pointer;
+    background: #1d283c; color: #dbe2ef; border: 1px solid #34435e;
+  }
+  button:hover:not(:disabled) { background: #26334c; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: #1c4a7e; border-color: #2a6cb3; }
+  button.primary:hover:not(:disabled) { background: #245a99; }
+  label.chip {
+    display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px;
+    border: 1px solid #2a3448; border-radius: 10px; cursor: pointer; margin: 8px 0;
+  }
+  label.chip:has(input:checked) { border-color: #3f8fdd; background: #14213a; }
+  label.chip input { margin-top: 4px; }
+  label.chip b { font-size: 15px; }
+  label.chip .desc { color: #8b96a8; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td { padding: 6px 8px; border-bottom: 1px solid #1b2334; }
+  td:first-child { color: #8b96a8; width: 40%; }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: #a8c7fa; }
+  .hint { color: #7b8494; font-size: 13px; }
+  #log {
+    background: #0a0e17; border: 1px solid #1b2334; border-radius: 8px;
+    padding: 10px 12px; height: 150px; overflow-y: auto; font-size: 12px;
+    font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap;
+  }
+  .spin { display: inline-block; animation: sp 1s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>sw2bridge 配置 <small>Switch 2 Pro 无线桥 · 网页版</small></h1>
+  <div class="hint">通过浏览器 WebHID 直连设备,无需安装任何软件(需要 Chrome / Edge / Opera)。
+    双击本文件即可使用,也可放到任意静态服务器。</div>
+
+  <div id="banner" class="banner warn" hidden></div>
+
+  <h2>设备</h2>
+  <div class="row">
+    <button id="btnConnect" class="primary">连接设备</button>
+    <button id="btnDisconnect">断开</button>
+    <span id="devLabel" class="mono"></span>
+  </div>
+
+  <h2>主机人格(电脑把手柄识别成什么)</h2>
+  <label class="chip"><input type="radio" name="persona" value="0" disabled>
+    <span><b>Switch Pro(v1)—— 推荐</b>
+    <div class="desc">VID 057e:2009。Steam 原生识别,游戏内显示与手柄丝印一致
+      的 ABXY 提示;非 Steam 游戏用 BetterJoy 或加入 Steam 转 XInput。</div></span></label>
+  <label class="chip"><input type="radio" name="persona" value="1" disabled>
+    <span><b>DualShock 4</b>
+    <div class="desc">VID 054c:09cc。给 DS4Windows / 原生支持 DS4 的游戏使用,
+    游戏内显示 PS 图形提示。</div></span></label>
+  <div class="row">
+    <button id="btnApply" class="primary" disabled>应用并保存</button>
+    <button id="btnSaveOnly" disabled>仅保存(不重枚举)</button>
+    <span class="hint">切换人格需要 USB 重新枚举,设备会短暂断开再回来。</span>
+  </div>
+
+  <h2>状态(每秒刷新)</h2>
+  <table id="status">
+    <tr><td>固件版本</td><td id="sVer" class="mono">—</td></tr>
+    <tr><td>当前人格</td><td id="sPersona">—</td></tr>
+    <tr><td>蓝牙链路</td><td id="sBle">—</td></tr>
+    <tr><td>手柄电池</td><td id="sBatt">—</td></tr>
+    <tr><td>对端 PID</td><td id="sPid" class="mono">—</td></tr>
+  </table>
+
+  <h2>通信日志</h2>
+  <div id="log"></div>
+  <div class="hint" style="margin-top:6px">
+    协议:HID feature report —— GET 0xF7 配置 / 0xF8 版本 / 0xF9 状态;
+    SET 0xF6(01 写配置 / 02 存 flash / 03 重枚举)。与固件 <code>cmd.h</code> 一一对应。
+  </div>
+</div>
+
+<script>
+"use strict";
+// ------------------------------------------------------------ protocol
+const REPORT_SET = 0xF6, REPORT_CONFIG = 0xF7, REPORT_VERSION = 0xF8, REPORT_STATUS = 0xF9;
+const FUNC_SET = 0x01, FUNC_SAVE = 0x02, FUNC_RECONNECT = 0x03;
+const SET_PAYLOAD = 63;          // descriptor report count for 0xF6
+const CONFIG_LEN = 60;           // config_body_t (config.h)
+
+const PERSONAS = ["Switch Pro (057e:2009)", "DualShock 4 (054c:09cc)"];
+const BLE_STATES = ["关闭", "扫描中", "连接中", "建立 GATT", "初始化序列",
+                    "切换订阅", "报告流中"];
+// Both bridge identities — either persona must be selectable to reconnect.
+const FILTERS = [{ vendorId: 0x057e, productId: 0x2009 },
+                 { vendorId: 0x054c, productId: 0x09cc }];
+
+// ------------------------------------------------------------ state / dom
+let device = null, pollTimer = null;
+const $ = id => document.getElementById(id);
+const banner = (cls, msg) => { const b = $("banner"); b.className = "banner " + cls;
+                               b.textContent = msg; b.hidden = !msg; };
+const log = msg => { const el = $("log"); const t = new Date().toTimeString().slice(0, 8);
+                     el.textContent += `[${t}] ${msg}\n`; el.scrollTop = el.scrollHeight; };
+
+// ------------------------------------------------------------ hid helpers
+// WebHID: report id passed separately; DataView contents exclude it.
+async function getVersion() {
+  const v = await device.receiveFeatureReport(REPORT_VERSION);
+  return new TextDecoder().decode(v.buffer).replace(/\0.*$/s, "").trim();
+}
+async function getConfig() {
+  const v = await device.receiveFeatureReport(REPORT_CONFIG);
+  return { version: v.getUint8(0), persona: v.getUint8(1) };
+}
+async function getStatus() {
+  const v = await device.receiveFeatureReport(REPORT_STATUS);
+  return {
+    persona:  v.getUint8(0),
+    ble:      v.getUint8(1),
+    flags:    v.getUint8(2),
+    battMV:   v.getUint16(4, true),
+    peerPID:  v.getUint16(6, true),
+  };
+}
+async function sendCmd(func, body) {   // body: optional Uint8Array (≤62)
+  const data = new Uint8Array(SET_PAYLOAD);
+  data[0] = func;
+  if (body) data.set(body.subarray(0, Math.min(body.length, SET_PAYLOAD - 1)), 1);
+  return device.sendFeatureReport(REPORT_SET, data);
+}
+
+// ------------------------------------------------------------ ui plumbing
+function setConnectedUI(on) {
+  $("btnConnect").disabled = on;
+  $("btnDisconnect").disabled = !on;
+  for (const r of document.querySelectorAll('input[name=persona]')) r.disabled = !on;
+  $("btnApply").disabled = !on;
+  $("btnSaveOnly").disabled = !on;
+  if (!on) { $("devLabel").textContent = ""; }
+}
+function selectedPersona() {
+  const r = document.querySelector('input[name=persona]:checked');
+  return r ? +r.value : null;
+}
+function markBusy(on, text) {
+  $("btnConnect").textContent = on ? "⟳ " + (text || "…") : "连接设备";
+}
+
+async function connect() {
+  try {
+    banner("", "");
+    const [dev] = await navigator.hid.requestDevice({ filters: FILTERS });
+    if (!dev) return;
+    device = dev;
+    device.addEventListener("inputreport", () => {});
+    await device.open();
+    setConnectedUI(true);
+    $("devLabel").textContent =
+      `${dev.productName || "sw2bridge"} · ${dev.vendorId.toString(16).padStart(4,"0")}:${dev.productId.toString(16).padStart(4,"0")}`;
+    log("已连接 " + $("devLabel").textContent);
+
+    const ver = await getVersion();
+    const cfg = await getConfig();
+    $("sVer").textContent = ver || "(空)";
+    document.querySelector(`input[name=persona][value="${cfg.persona}"]`).checked = true;
+    log(`版本 "${ver}" / 配置 v${cfg.version} 人格=${PERSONAS[cfg.persona] || "?"}`);
+    banner("ok", "已连接。");
+    refreshStatus();
+    pollTimer = setInterval(refreshStatus, 1000);
+  } catch (e) {
+    log("连接失败: " + e);
+    banner("err", "连接失败:" + e.message);
+    await disconnect(true);
+  }
+}
+
+async function disconnect(silent) {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (device?.opened) { try { await device.close(); } catch {} }
+  device = null;
+  setConnectedUI(false);
+  if (!silent) { banner("warn", "已断开。"); log("已断开"); }
+}
+
+async function refreshStatus() {
+  if (!device?.opened) return;
+  try {
+    const s = await getStatus();
+    $("sPersona").textContent = PERSONAS[s.persona] || "?";
+    $("sBle").textContent = (BLE_STATES[s.ble] ?? "?") +
+        ((s.flags & 1) ? " · 报告流中" : "");
+    $("sBatt").textContent = s.battMV ? `${(s.battMV/1000).toFixed(2)} V` +
+        ((s.flags & 2) ? " · 充电中" : "") : "—";
+    $("sPid").textContent = s.peerPID ? "0x" + s.peerPID.toString(16).padStart(4,"0") : "—";
+    // NOTE: the radio is intentionally NOT synced from live status here — it
+    // mirrors the *staged* config (read once on connect). Save-only flows keep
+    // the user's choice visible; a BOOTSEL flip shows up as a disconnect event.
+  } catch (e) {
+    // device re-enumerated / unplugged mid-poll
+    log("状态读取失败: " + e);
+    await disconnect(true);
+    banner("warn", "设备已断开(可能被重新枚举或拔出)。如刚切换人格,请点「连接设备」重连新身份。");
+  }
+}
+
+async function applyAndSave() {
+  const p = selectedPersona();
+  if (p === null) return;
+  try {
+    markBusy(true, "写入");
+    const body = new Uint8Array(CONFIG_LEN);
+    body[0] = 1;              // config version (CONFIG_VERSION)
+    body[1] = p;
+    await sendCmd(FUNC_SET, body);   log("已写入配置(人格=" + PERSONAS[p] + ")");
+    await new Promise(r => setTimeout(r, 60));  // settle, cf. config_tool.py
+    await sendCmd(FUNC_SAVE);        log("已保存到 flash");
+    await new Promise(r => setTimeout(r, 60));
+    await sendCmd(FUNC_RECONNECT);   log("已请求 USB 重枚举 — 设备即将以新身份出现");
+    await disconnect(true);
+    banner("ok", "已保存。设备正以新身份重新枚举,请点击「连接设备」重新选择(两个身份都在列表里)。");
+  } catch (e) {
+    log("应用失败: " + e);
+    banner("err", "应用失败:" + e.message);
+  } finally { markBusy(false); }
+}
+
+async function saveOnly() {
+  try {
+    const p = selectedPersona();
+    if (p === null) return;
+    const body = new Uint8Array(CONFIG_LEN);
+    body[0] = 1; body[1] = p;
+    await sendCmd(FUNC_SET, body);
+    await new Promise(r => setTimeout(r, 60));
+    await sendCmd(FUNC_SAVE);
+    log("已保存到 flash(未重枚举,重启后生效)");
+    banner("ok", "已保存。当前枚举不变,重启 / 重新插拔后按新配置枚举。");
+  } catch (e) {
+    log("保存失败: " + e);
+    banner("err", "保存失败:" + e.message);
+  }
+}
+
+// ------------------------------------------------------------ boot
+window.addEventListener("load", () => {
+  if (!navigator.hid) {
+    banner("err", "此浏览器不支持 WebHID。请使用 Chrome / Edge / Opera(Firefox / Safari 不支持)。");
+    $("btnConnect").disabled = true;
+    return;
+  }
+  $("btnConnect").onclick = connect;
+  $("btnDisconnect").onclick = () => disconnect(false);
+  $("btnApply").onclick = applyAndSave;
+  $("btnSaveOnly").onclick = saveOnly;
+
+  // Live plug/unplug tracking for the *authorized* identity.
+  navigator.hid.addEventListener("disconnect", ({ device: d }) => {
+    if (device && d === device) {
+      log("USB 断开事件");
+      disconnect(true);
+      banner("warn", "设备已断开(重新枚举或拔出)。请点击「连接设备」。");
+    }
+  });
+  navigator.hid.addEventListener("connect", ({ device: d }) => {
+    log("USB 连接事件: " + (d.productId || 0).toString(16));
+  });
+  log("就绪。协议见页面底部;固件源码 firmware/cmd.h。");
+});
+</script>
+</body>
+</html>

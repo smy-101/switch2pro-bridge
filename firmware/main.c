@@ -16,6 +16,8 @@
 #include "tusb.h"
 
 #include "log.h"
+#include "config.h"
+#include "cmd.h"
 #include "sw2_ble.h"
 #include "sw2_protocol.h"
 #include "ds4.h"
@@ -68,7 +70,13 @@ static void bootsel_task(uint32_t now) {
     } else if (down && was_down && !fired && now - down_since >= 1500) {
         fired = true;
         usb_persona_toggle();
-        LOG("[usb] persona -> %s (re-enumerating)", usb_persona_name());
+        // Keep flash in sync so the choice survives replug/reboot —
+        // same storage the web config page writes (config.h).
+        config_body_t b = *config_get();
+        b.persona = (uint8_t)usb_persona_get();
+        (void)config_set((const uint8_t *)&b, sizeof b);
+        (void)config_save();
+        LOG("[usb] persona -> %s (saved, re-enumerating)", usb_persona_name());
         usb_reenumerate();
     } else if (!down) {
         was_down = false;
@@ -83,12 +91,18 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
                            hid_report_type_t report_type,
                            uint8_t const *buffer, uint16_t bufsize) {
     (void)itf;
+    if ((report_type == HID_REPORT_TYPE_FEATURE ||
+         report_type == HID_REPORT_TYPE_INVALID) &&
+        bridge_cmd_is_mine(report_id)) {
+        bridge_cmd_set(report_id, buffer, bufsize);
+        return;
+    }
     if (report_type == HID_REPORT_TYPE_OUTPUT || report_type == HID_REPORT_TYPE_INVALID) {
         if (usb_persona_get() == USB_PERSONA_PRO && bufsize >= 2) {
             // 0x01 = command+rumble, 0x10 = rumble only, 0x80 = USB bridge cmds
             LOG("[pro] out report id=%02x sub=%02x len=%u",
                 report_id, buffer[1], bufsize);
-        } else if (report_id == DS4_OUTPUT_REPORT_ID) {
+        } else if (report_id == DS4_OUTPUT_REPORT_ID && bufsize >= 2) {
             LOG("[ds4] output report 0x05: flags=%02x rumble R=%u L=%u led=%02x%02x%02x",
                 buffer[1], bufsize > 4 ? buffer[4] : 0, bufsize > 5 ? buffer[5] : 0,
                 bufsize > 6 ? buffer[6] : 0, bufsize > 7 ? buffer[7] : 0,
@@ -104,9 +118,17 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
 uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
                                hid_report_type_t report_type,
                                uint8_t *buffer, uint16_t reqlen) {
-    (void)itf; (void)buffer; (void)reqlen;
+    (void)itf;
+    if (report_type == HID_REPORT_TYPE_FEATURE && bridge_cmd_is_mine(report_id)) {
+        return bridge_cmd_get(report_id, buffer, reqlen);
+    }
+    if (report_type == HID_REPORT_TYPE_INVALID && bridge_cmd_is_mine(report_id)) {
+        // Some hosts (and the WebHID shim on some builds) probe with an
+        // unspecified report type; answer feature-style regardless.
+        return bridge_cmd_get(report_id, buffer, reqlen);
+    }
     LOG("[hid] get_report id=%02x type=%d", report_id, report_type);
-    return 0;  // v1: no feature reports; hosts fall back to defaults
+    return 0;  // other feature reports unimplemented; hosts fall back
 }
 
 // ------------------------------------------------------------------ LED
@@ -135,6 +157,8 @@ int main(void) {
     set_sys_clock_khz(150000, true);
 
     log_init();
+    config_init();                       // persona from flash before USB enum
+    usb_persona_set(config_get()->persona);
     tusb_init();
     flash_safe_execute_core_init();
 
@@ -157,6 +181,7 @@ int main(void) {
         tud_task();
         watchdog_update();
         log_drain();
+        (void)bridge_cmd_poll();   // deferred re-enumeration from web config
         uint32_t now = to_ms_since_boot(get_absolute_time());
         led_update(now);
         if (now - bootsel_last_poll >= 10) {

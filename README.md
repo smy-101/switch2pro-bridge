@@ -13,8 +13,23 @@ Switch 2 Pro ──BLE(免配对私有协议)──> Pico 2 W ──USB(TinyUSB 
                                              → DS4Windows / Steam 识别(PS 图形提示)
 ```
 
-v0.2:按键、摇杆(含闪存校准)、电池电压、自动重连、BOOTSEL 长按切换人格。
+v0.3:按键、摇杆(含闪存校准)、电池电压、自动重连、BOOTSEL 长按切换人格、
+**网页配置(WebHID)**与人格 flash 持久化。
 路线图:震动回传 → 陀螺仪/加速计透传(Steam 体感)→ 耳机口 USB 声卡。
+
+## 网页配置(WebHID)
+
+不用装任何软件:用 Chrome / Edge / Opera 打开 **`web/index.html`**(双击即可,也可
+托管到任意静态服务器),点「连接设备」选中桥,即可:
+
+- 查看/切换主机人格(Switch Pro ↔ DS4),保存到 flash(重启/换机不变)
+- 实时状态:蓝牙链路阶段、手柄电池电压、对端 PID、固件版本
+
+原理与 [DS5Dongle](https://github.com/awalol/DS5Dongle) 同款:两个人格的 HID
+report descriptor 里都夹带了厂商 feature report(0xF6~0xF9),浏览器通过
+WebHID 的 `sendFeatureReport / receiveFeatureReport` 直接读写,配置存于 flash
+最后一个 4KB 扇区(带魔数+CRC,重刷固件自动回默认)。协议定义见
+`firmware/cmd.h`;BOOTSEL 长按切换现在也会写入 flash。
 
 ## 人格切换(为什么要两个)
 
@@ -27,6 +42,8 @@ Switch 2 Pro 的丝印是任天堂布局(右=A,下=B)。伪装成 DS4 时游戏�
 
 - [x] 固件编译通过(`build/sw2bridge.uf2`)
 - [x] 双人格:Switch Pro v1(默认)+ DS4,BOOTSEL 长按切换
+- [x] 网页配置(WebHID):人格切换/保存、实时状态(`web/index.html`)
+- [x] 人格 flash 持久化(重刷固件自动回默认)
 - [ ] **上板联调(等板子到货)** — 见 `docs/BRINGUP.md`
 - [ ] Pro 手柄 BLE 初始化序列实机验证(目前依据 Joy-Con 2 已验证序列外推,详见 BRINGUP 风险清单)
 - [ ] 震动 / 体感 / 音频(v2+)
@@ -49,8 +66,13 @@ firmware/          Pico 2 W 固件 (C, pico-sdk 2.3.0 + BTstack + TinyUSB)
   sw2_decode.c/.h    公共报告 0x05 / Pro 原生报告 0x09 解析 + 摇杆校准
   pro.c/.h           Switch Pro v1 人格: 0x30 报告编码(默认)
   ds4.c/.h           DS4 人格: 报告编码(含 A/B、X/Y 布局对换)
+  config.c/.h        配置结构 + flash 持久化(末尾 4KB 扇区, 魔数+CRC)
+  cmd.c/.h           网页配置协议: feature report 0xF6~0xF9(见上)
   usb_descriptors.c  双人格设备/HID/字符串描述符 + CDC(日志)复合
   btstack_config.h / tusb_config.h
+web/
+  index.html         网页配置器(单文件, 零依赖, 双击即用)
+  test_web.cjs       页面逻辑雷雾测试(node 直接跑)
 refs/              参考实现(git 忽略,本地保留)
   linux-switch2/     社区驱动 + PROTOCOL.md ★协议唯一权威来源
   hid-nintendo-valve.c  Valve 主线内核驱动(Pro 映射/USB 侧)

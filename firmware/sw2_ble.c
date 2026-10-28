@@ -47,12 +47,17 @@ static critical_section_t report_cs;
 static btstack_timer_source_t tmr;     // command/init flow
 static btstack_timer_source_t tmr_wd;  // independent watchdog
 
+// Restart the single flow timer. BTstack forbids re-adding a registered
+// timer: it asserts (compiled out here) and then corrupts the timer list by
+// linking the node in twice, so remove first (safe no-op when not pending).
 static void timer_schedule(void (*fn)(btstack_timer_source_t *), uint32_t ms) {
+    btstack_run_loop_remove_timer(&tmr);
     btstack_run_loop_set_timer(&tmr, ms);
     btstack_run_loop_set_timer_handler(&tmr, fn);
     btstack_run_loop_add_timer(&tmr);
 }
 static void watchdog_schedule(void (*fn)(btstack_timer_source_t *), uint32_t ms) {
+    btstack_run_loop_remove_timer(&tmr_wd);
     btstack_run_loop_set_timer(&tmr_wd, ms);
     btstack_run_loop_set_timer_handler(&tmr_wd, fn);
     btstack_run_loop_add_timer(&tmr_wd);
@@ -74,6 +79,17 @@ const char *sw2_ble_state_name(void) {
 bool sw2_ble_is_streaming(void) { return st == SW2_ST_STREAMING; }
 bool sw2_ble_use_native_reports(void) { return stream_native; }
 uint16_t sw2_ble_peer_pid(void) { return peer_pid; }
+
+// Vendor status report (cmd.h 0xF9): numeric state + last battery sample.
+uint8_t sw2_ble_state_code(void) { return (uint8_t)st; }
+bool sw2_ble_battery(uint16_t *mv, uint8_t *charging) {
+    if (!latest_valid) return false;
+    critical_section_enter_blocking(&report_cs);
+    if (mv) *mv = latest.batt_mv;
+    if (charging) *charging = latest.charging;
+    critical_section_exit(&report_cs);
+    return true;
+}
 
 bool sw2_ble_take_state(sw2_state_t *out) {
     if (!latest_valid) return false;
@@ -216,11 +232,11 @@ static const act_t init_acts[] = {
      {SW2_REPORT_ID_PRO_NATIVE, 0, 0, 0}, 4, 0, 0},
     {ACT_WAIT_NATIVE, "wait-native", 0, 0, {0}, 0, 0, 0},
     {ACT_CMD, "fw-info", SW2_CMD_FW_INFO, SW2_SUBCMD_FW_INFO_GET, {0}, 0, 0, 0},
-    {ACT_FLASH_READ, "serial", 0, 0, {0}, 0, SW2_FLASH_SERIAL, 0x10},
-    {ACT_FLASH_READ, "cal-L-factory", 0, 0, {0}, 0, SW2_FLASH_CAL_L_FACTORY, 9},
-    {ACT_FLASH_READ, "cal-R-factory", 0, 0, {0}, 0, SW2_FLASH_CAL_R_FACTORY, 9},
-    {ACT_FLASH_READ, "cal-L-user", 0, 0, {0}, 0, SW2_FLASH_CAL_L_USER, 11},
-    {ACT_FLASH_READ, "cal-R-user", 0, 0, {0}, 0, SW2_FLASH_CAL_R_USER, 11},
+    {ACT_FLASH_READ, "serial", SW2_CMD_FLASH, SW2_SUBCMD_FLASH_READ, {0}, 0, SW2_FLASH_SERIAL, 0x10},
+    {ACT_FLASH_READ, "cal-L-factory", SW2_CMD_FLASH, SW2_SUBCMD_FLASH_READ, {0}, 0, SW2_FLASH_CAL_L_FACTORY, 9},
+    {ACT_FLASH_READ, "cal-R-factory", SW2_CMD_FLASH, SW2_SUBCMD_FLASH_READ, {0}, 0, SW2_FLASH_CAL_R_FACTORY, 9},
+    {ACT_FLASH_READ, "cal-L-user", SW2_CMD_FLASH, SW2_SUBCMD_FLASH_READ, {0}, 0, SW2_FLASH_CAL_L_USER, 11},
+    {ACT_FLASH_READ, "cal-R-user", SW2_CMD_FLASH, SW2_SUBCMD_FLASH_READ, {0}, 0, SW2_FLASH_CAL_R_USER, 11},
     {ACT_RAW_SELECTOR, "raw-selector", 0, 0, {0}, 0, 0, 0},
     {ACT_CMD, "feat-set-final", SW2_CMD_FEATSEL, SW2_SUBCMD_FEATSEL_SET,
      {SW2_FEATURE_PRO_V1, 0, 0, 0}, 4, 0, 0},
@@ -357,6 +373,16 @@ static void handle_cmd_reply(const uint8_t *data, uint16_t len) {
     const act_t *a = &init_acts[act_idx];
     if (len < 8) { fatal("short reply"); return; }
 
+    // Replies echo the request command/subcommand (PROTOCOL.md §6.1: request
+    // 03 91 01 0a -> reply 03 01 01 0a; the Valve driver matches the same
+    // way). Ignore anything else arriving on the reply handle — advancing on
+    // a stray notification would skip a step.
+    if (data[0] != a->cmd || data[3] != a->subcmd) {
+        LOG("[sw2] stray reply %02x/%02x (waiting %02x/%02x) — ignored",
+            data[0], data[3], a->cmd, a->subcmd);
+        return;
+    }
+
     if (a->kind == ACT_FLASH_READ && (uint32_t)(len - 8) >= 8u + a->read_len) {
         const uint8_t *pl = &data[8];
         uint32_t addr = (uint32_t)pl[4] | ((uint32_t)pl[5] << 8) |
@@ -385,9 +411,15 @@ static void handle_cmd_reply(const uint8_t *data, uint16_t len) {
 }
 
 static void handle_input_notify(uint16_t value_handle, const uint8_t *data, uint16_t len) {
+    static bool len_warned;
     if (len != SW2_GATT_REPORT_LEN) {
-        LOG("[sw2] report len %u (expected 63) — MTU too small?", len);
+        if (!len_warned) {   // report rate is ~133 Hz — log the condition once
+            len_warned = true;
+            LOG("[sw2] report len %u (expected 63) — MTU too small?", len);
+        }
         if (len < SW2_GATT_REPORT_LEN) return;
+    } else {
+        len_warned = false;
     }
     sw2_state_t s;
     if (value_handle == SW2_HANDLE_NATIVE_INPUT_VALUE) {
