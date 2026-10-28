@@ -162,9 +162,8 @@ int main(void) {
     tusb_init();
     flash_safe_execute_core_init();
 
-    LOG("sw2bridge v0.2 (Switch 2 Pro -> %s persona, Pico 2 W)", usb_persona_name());
-
-    watchdog_enable(4000, true);
+    LOG("%s (Switch 2 Pro -> %s persona, Pico 2 W)",
+        SW2BRIDGE_VERSION, usb_persona_name());
 
     if (cyw43_arch_init()) {
         LOG("FATAL: cyw43 init failed");
@@ -174,6 +173,11 @@ int main(void) {
 
     btstack_cyw43_init(cyw43_arch_async_context());
     sw2_ble_init();
+
+    // Watchdog arms AFTER the slow cyw43/btstack bring-up (WL firmware load
+    // can stretch a fixed 4s budget on cold boot); the main loop feeds it.
+    // A hang *inside* init is no longer watchdog-caught — accepted tradeoff.
+    watchdog_enable(4000, true);
 
     uint32_t bootsel_last_poll = 0;
     sw2_state_t s;

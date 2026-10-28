@@ -34,6 +34,10 @@
 #define CMD_REPORT_VERSION 0xF8
 #define CMD_REPORT_STATUS  0xF9
 
+// Firmware version string returned on GET 0xF8; also used by the boot log.
+// Keep in sync with README.md 版本号 and release tags.
+#define SW2BRIDGE_VERSION "sw2bridge v0.3"
+
 enum {
     CMD_FUNC_SET_CONFIG = 0x01,
     CMD_FUNC_SAVE_FLASH = 0x02,

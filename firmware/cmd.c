@@ -14,8 +14,7 @@
 
 #include <string.h>
 
-// Keep in sync with README.md 版本号 and release tags.
-#define SW2BRIDGE_VERSION "sw2bridge v0.3"
+// Keep in sync with README.md 版本号 and release tags (shared with main.c).
 
 typedef enum {
     RECONNECT_NONE = 0,
@@ -44,25 +43,28 @@ uint16_t bridge_cmd_get(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
         return n;
     }
     case CMD_REPORT_STATUS: {
-        const uint16_t n = 16 < reqlen ? 16 : reqlen;
-        memset(buffer, 0, n);
-
+        // Build the full 16-byte snapshot first, then copy what the host
+        // asked for — never write past `reqlen` (a short GET_REPORT probe
+        // would otherwise overflow the reported length).
+        uint8_t snap[16] = {0};
         uint16_t mv = 0;
         uint8_t charging = 0;
         (void)sw2_ble_battery(&mv, &charging);
 
-        buffer[0] = (uint8_t)usb_persona_get();
-        buffer[1] = sw2_ble_state_code();
+        snap[0] = (uint8_t)usb_persona_get();
+        snap[1] = sw2_ble_state_code();
         uint8_t flags = 0;
         if (sw2_ble_is_streaming()) flags |= 0x01;
         if (charging) flags |= 0x02;
-        buffer[2] = flags;
-        buffer[3] = 0;
-        buffer[4] = (uint8_t)(mv & 0xFF);
-        buffer[5] = (uint8_t)(mv >> 8);
+        snap[2] = flags;
+        snap[4] = (uint8_t)(mv & 0xFF);
+        snap[5] = (uint8_t)(mv >> 8);
         const uint16_t pid = sw2_ble_peer_pid();
-        buffer[6] = (uint8_t)(pid & 0xFF);
-        buffer[7] = (uint8_t)(pid >> 8);
+        snap[6] = (uint8_t)(pid & 0xFF);
+        snap[7] = (uint8_t)(pid >> 8);
+
+        const uint16_t n = 16 < reqlen ? 16 : reqlen;
+        memcpy(buffer, snap, n);
         return n;
     }
     default:

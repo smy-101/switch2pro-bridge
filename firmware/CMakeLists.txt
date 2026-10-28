@@ -25,6 +25,10 @@ add_executable(sw2bridge
 
 target_include_directories(sw2bridge PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
+# Firmware warnings are kept at zero — keep it that way (embedded-systems
+# checklist: -Wall -Wextra clean before every board session).
+target_compile_options(sw2bridge PRIVATE -Wall -Wextra)
+
 target_link_libraries(sw2bridge
     pico_stdlib
     pico_cyw43_arch_none

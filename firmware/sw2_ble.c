@@ -354,6 +354,11 @@ static void common_watchdog_cb(btstack_timer_source_t *t) {
 
 static void run_next_act(void) {
     if (st != SW2_ST_INIT) return;
+    // Advance on entry: every caller has just finished act `act_idx` (reply
+    // guard, native-report gate) except the sequence start, which calls
+    // send_current_act() directly — advancing there too is what kept the
+    // sequence stuck on step 1 forever.
+    act_idx++;
     if (act_idx >= INIT_ACT_COUNT) {
         st = SW2_ST_SWITCHING;
         timer_schedule(unsub_native_cb, 250);
@@ -517,7 +522,7 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                     LOG("[sw2] CCCs set; starting init sequence");
                     act_idx = 0;
                     st = SW2_ST_INIT;
-                    run_next_act();
+                    send_current_act();   // step 1; replies advance via run_next_act
                 }
             } else if (st == SW2_ST_SWITCHING && !common_seen && !stream_native) {
                 // native CCC off completed -> subscribe common
