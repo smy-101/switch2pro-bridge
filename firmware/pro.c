@@ -38,5 +38,5 @@ void pro_encode(const sw2_state_t *st, uint8_t body[PRO_INPUT_REPORT_BODY]) {
     pack_stick(&body[5], st->raw_lx, st->raw_ly);
     pack_stick(&body[8], st->raw_rx, st->raw_ry);
 
-    // [11..46] IMU: zero until motion support (v2)
+    // [11..62] IMU / trailing pad: zero until motion support (v2)
 }

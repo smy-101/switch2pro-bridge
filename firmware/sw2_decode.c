@@ -9,14 +9,6 @@ void sw2_cal_set_defaults(sw2_stick_cal_t *cal) {
     cal->range_neg_x = cal->range_neg_y = 2048;
 }
 
-static uint16_t unx(const uint8_t *b) {  // 12-bit packed pair, PROTOCOL.md §52
-    uint16_t x = (uint16_t)(b[0] | ((b[1] & 0x0f) << 8));
-    uint16_t y = (uint16_t)((b[1] >> 4) | (b[2] << 4));
-    // pack both into one return via caller; helper below instead
-    (void)y; (void)x;
-    return 0;
-}
-
 static void stick_unpack(const uint8_t *b, uint16_t *x, uint16_t *y) {
     *x = (uint16_t)(b[0] | ((b[1] & 0x0f) << 8));
     *y = (uint16_t)((b[1] >> 4) | (b[2] << 4));

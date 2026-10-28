@@ -52,16 +52,22 @@ void log_hexdump(const char *tag, const uint8_t *data, unsigned len) {
 
 void log_drain(void) {
     if (!log_cs_ready) return;
-    // move up to 256 bytes per call into CDC
+    // Keep logs in the ring until a CDC terminal is actually open, so early
+    // boot logs survive a late-attaching serial monitor. Bound the drain by
+    // the CDC write space so nothing is pulled from the ring and lost.
+    if (!tud_ready() || !tud_cdc_connected()) return;
+    uint32_t space = tud_cdc_write_available();
+    if (space == 0) return;
+    if (space > 256) space = 256;
     static char out[256];
     unsigned n = 0;
     critical_section_enter_blocking(&log_cs);
-    while (log_tail != log_head && n < sizeof(out)) {
+    while (log_tail != log_head && n < space) {
         out[n++] = log_ring[log_tail];
         log_tail = (log_tail + 1) % LOG_RING_SIZE;
     }
     critical_section_exit(&log_cs);
-    if (n && tud_ready() && tud_cdc_connected()) {
+    if (n) {
         tud_cdc_write(out, n);
         tud_cdc_write_flush();
     }

@@ -20,7 +20,7 @@
 
 - 设备管理器 → "端口(COM 和 LPT)" → 找 `USB 串行设备(COMx)`
 - PuTTY / Windows Terminal + `serial` 模式连接(任意波特率,CDC 不校验)
-- 固件上电横幅:`sw2bridge v0.1 ...`
+- 固件上电横幅:`sw2bridge v0.2 ...`
 
 ### LED 含义
 
@@ -46,12 +46,12 @@
 ## 4. 预期日志序列(成功路径)
 
 ```
-sw2bridge v0.1 ...
+sw2bridge v0.2 ...
 [sw2] btstack up
 [sw2] scanning...
 [sw2] adv match pid=2069 rssi=-52 type=0 addr=XX:XX:...
 [sw2] connecting to XX:XX:... (pid 2069)
-[sw2] connected handle 0x0000
+[sw2] connected handle 0x00XX
 [sw2] ATT MTU -> 247            ← 必须 >66,否则报告会被截断!
 [sw2] cmd-reply CCC on; enabling native CCC
 [sw2] CCCs set; starting init sequence
@@ -85,7 +85,7 @@ sw2bridge v0.1 ...
 | 某一步 `command reply timeout` | Pro 的初始化序列与 Joy-Con 有差异 | **最关键的未知数**:记录卡在第几步 + 最后一条 reply hexdump |
 | `gatt query status=02/03` | 写句柄不存在(Pro 的 GATT 布局偏移) | 需要做一次 UUID 发现代替固定句柄,把日志带回来 |
 | 走到 `common 0x05 silent — falling back to native` | 公共报告订阅后无数据 | 固件自动回退原生 0x09 解析;若原生也没数据,需补 §38 的 `05` 选择命令 |
-| Steam 不识别为 Pro / 提示不是 ABXY | 描述符或报告长度问题 | 日志确认人格为 switch-pro;真机 0x30 报告长度按 48 字节发送,若 SDL 读取异常可改为补零到 64 字节(代码里一处宏可调);把现象与日志带回来 |
+| Steam 不识别为 Pro / 提示不是 ABXY | 描述符或报告长度问题 | 日志确认人格为 switch-pro;0x30 报文已按真机/描述符补零到 64 字节发送,若 SDL 仍读取异常把现象与日志带回来 |
 | 按键全错/摇杆偏 | 布局或校准差异 | 对照日志里的 serial/校准 hexdump 和 Valve 映射表修正 |
 
 ## 6. 如果需要抓包(REA 路径)
