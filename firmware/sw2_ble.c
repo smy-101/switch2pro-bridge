@@ -47,6 +47,15 @@ static critical_section_t report_cs;
 static btstack_timer_source_t tmr;     // command/init flow
 static btstack_timer_source_t tmr_wd;  // independent watchdog
 
+// MTU strategy, driven by hardware observation: the Switch 2 Pro never
+// answers an ATT Exchange MTU request (auto negotiation then wedges every
+// queued write behind BTstack's 30s ATT timeout -> status 0x7f). So the
+// exchange is attempted manually once; if the peer stays silent, mtu_skip
+// latches for the rest of the power cycle and setup proceeds with plain
+// writes at the default ATT MTU 23.
+static bool mtu_skip;      // exchange proven useless — don't retry it
+static bool mtu_pending;   // manual exchange in flight
+
 // Restart the single flow timer. BTstack forbids re-adding a registered
 // timer: it asserts (compiled out here) and then corrupts the timer list by
 // linking the node in twice, so remove first (safe no-op when not pending).
@@ -121,6 +130,8 @@ static void start_scan(void);
 static void run_next_act(void);
 static void fatal(const char *why);
 static void setup_watchdog_cb(btstack_timer_source_t *t);
+static void start_ccc_setup(void);
+static void mtu_watchdog_cb(btstack_timer_source_t *t);
 static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                                uint8_t *packet, uint16_t size);
 
@@ -300,6 +311,20 @@ static void send_current_act(void) {
         return;
     }
 
+    // vib-setup (8 hdr + 21 payload = 29 B) cannot fit a single ATT write at
+    // the default MTU 23 (max 20 B). Skip it in that case — it is an opaque
+    // setup packet; the rest of the sequence still proves ATT liveness.
+    if (a->kind == ACT_CMD && a->cmd == SW2_CMD_VIBRATION && a->payload_len == 21) {
+        uint16_t mtu = 23;
+        (void)gatt_client_get_mtu(conn, &mtu);   // stays 23 when not exchanged
+        if (mtu < 8 + 21 + 3) {
+            LOG("[sw2] step %u/%u vib-setup skipped (29 B > MTU %u-3)",
+                act_idx + 1, (unsigned)INIT_ACT_COUNT, mtu);
+            timer_schedule(guard_next_cb, SW2_CMD_GUARD_MS);
+            return;
+        }
+    }
+
     uint8_t plen = a->payload_len;
     if (a->kind == ACT_FLASH_READ) {
         cmd_buf[8] = a->read_len;
@@ -467,6 +492,33 @@ static void enable_native_ccc(void) {
         sw2_packet_handler, conn, SW2_HANDLE_NATIVE_INPUT_CCC, 2, (uint8_t *)&on);
 }
 
+// ------------------------------------------------------- MTU / CCC setup
+static void ccc_reply_write(void) {
+    static uint16_t on = 0x0001;
+    LOG("[sw2] enabling cmd-reply CCC");
+    gatt_client_write_characteristic_descriptor_using_descriptor_handle(
+        sw2_packet_handler, conn, SW2_HANDLE_COMMAND_REPLY_CCC, 2, (uint8_t *)&on);
+}
+
+// Begin the CCC handshake: cmd-reply CCC first, native CCC on its query
+// complete. Also arms the setup watchdog: if the peer ignores even plain
+// writes, bail out fast instead of waiting BTstack's 30s ATT timeout.
+static void start_ccc_setup(void) {
+    mtu_pending = false;
+    ccc_reply_write();
+    timer_schedule(setup_watchdog_cb, SW2_SETUP_SILENT_MS);
+}
+
+static void mtu_watchdog_cb(btstack_timer_source_t *t) {
+    (void)t;
+    if (st == SW2_ST_SETUP && mtu_pending) {
+        mtu_pending = false;
+        mtu_skip = true;   // latch: no more MTU exchanges this power cycle
+        LOG("[sw2] MTU exchange unanswered — next attempt without it (MTU 23)");
+        fatal("MTU exchange unanswered");
+    }
+}
+
 static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                                uint8_t *packet, uint16_t size) {
     (void)channel; (void)size;
@@ -501,18 +553,21 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                     // NOT send an L2CAP Connection Parameter Update Request
                     // here: that PDU is Peripheral-only (Core Vol 3/A 4.20).
                     // Sending it as Central is a spec violation — observed on
-                    // the Switch 2 Pro as a wedged ATT server (the auto MTU
-                    // exchange goes unanswered, every queued GATT op then
-                    // times out with 0x7f) or an instant link drop.
-                    static uint16_t on = 0x0001;
-                    LOG("[sw2] enabling cmd-reply CCC");
-                    gatt_client_write_characteristic_descriptor_using_descriptor_handle(
-                        sw2_packet_handler, conn, SW2_HANDLE_COMMAND_REPLY_CCC, 2, (uint8_t *)&on);
-                    // If the peer never answers the (auto) MTU exchange, all
-                    // queued writes stall for BTstack's 30s ATT timeout. Bail
-                    // out early instead, so the retry loop stays fast and the
-                    // log states the cause.
-                    timer_schedule(setup_watchdog_cb, SW2_SETUP_SILENT_MS);
+                    // the Switch 2 Pro as a wedged ATT server or an instant
+                    // link drop.
+                    //
+                    // The Pro also never answers an ATT MTU exchange, which
+                    // (with auto negotiation) wedges every queued write for
+                    // 30s. Attempt the exchange manually once; if silent,
+                    // latch mtu_skip and fall back to plain writes at MTU 23.
+                    if (mtu_skip) {
+                        start_ccc_setup();
+                    } else {
+                        mtu_pending = true;
+                        LOG("[sw2] requesting MTU exchange");
+                        gatt_client_send_mtu_negotiation(sw2_packet_handler, conn);
+                        timer_schedule(mtu_watchdog_cb, SW2_MTU_WAIT_MS);
+                    }
                 } else if (status != ERROR_CODE_SUCCESS && conn == 0) {
                     LOG("[sw2] connection attempt failed");
                     start_scan();
@@ -529,6 +584,13 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
             hci_con_handle_t h = gatt_event_query_complete_get_handle(packet);
             if (status != ERROR_CODE_SUCCESS) {
                 LOG("[sw2] gatt query status=%02x (con 0x%04x)", status, h);
+                if (st == SW2_ST_SETUP && mtu_pending) {
+                    // explicit rejection of the manual MTU exchange
+                    mtu_pending = false;
+                    mtu_skip = true;
+                    fatal("MTU exchange rejected — continuing without");
+                    break;
+                }
                 if (st == SW2_ST_INIT) { fatal("gatt write failed"); break; }
                 // CCC writes are the setup stage: without them neither
                 // command replies nor input reports can ever arrive, so a
@@ -556,6 +618,8 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
 
         case GATT_EVENT_MTU:
             LOG("[sw2] ATT MTU -> %u", gatt_event_mtu_get_MTU(packet));
+            mtu_pending = false;
+            if (st == SW2_ST_SETUP) start_ccc_setup();
             break;
 
         case GATT_EVENT_NOTIFICATION: {
@@ -596,7 +660,7 @@ void sw2_ble_init(void) {
         SW2_CONN_LATENCY, SW2_CONN_SUPERVISION,
         0x0010, 0x0030);
 
-    gatt_client_mtu_enable_auto_negotiation(1);
+    gatt_client_mtu_enable_auto_negotiation(0);   // exchange is driven manually above
 
     hci_cb_reg.callback = &sw2_packet_handler;
     hci_add_event_handler(&hci_cb_reg);

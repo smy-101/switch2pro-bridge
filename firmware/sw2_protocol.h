@@ -180,5 +180,6 @@ static const uint8_t SW2_UUID_SERVICE[16] = {          // little-endian, as gatt
 #define SW2_COMMON_WAIT_MS      600
 #define SW2_NATIVE_TO_COMMON_DELAY_MS 250
 #define SW2_SETUP_SILENT_MS     2000    // no ATT progress right after connect => stalled MTU exchange, retry
+#define SW2_MTU_WAIT_MS         700     // manual MTU exchange attempt before falling back to MTU 23 writes
 
 #endif
