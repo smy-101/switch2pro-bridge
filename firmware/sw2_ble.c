@@ -36,7 +36,6 @@ static bd_addr_type_t peer_addr_type;
 static uint16_t peer_pid;
 static bool stream_native;        // decoding native reports (fallback)
 static bool native_seen, common_seen;
-static bool replies_ccc_done;
 
 // decoded report handoff (IRQ -> main)
 static sw2_state_t latest;
@@ -49,12 +48,18 @@ static btstack_timer_source_t tmr_wd;  // independent watchdog
 
 // MTU strategy, driven by hardware observation: the Switch 2 Pro never
 // answers an ATT Exchange MTU request (auto negotiation then wedges every
-// queued write behind BTstack's 30s ATT timeout -> status 0x7f). So the
-// exchange is attempted manually once; if the peer stays silent, mtu_skip
-// latches for the rest of the power cycle and setup proceeds with plain
-// writes at the default ATT MTU 23.
-static bool mtu_skip;      // exchange proven useless — don't retry it
-static bool mtu_pending;   // manual exchange in flight
+// queued write behind BTstack's 30s ATT timeout -> status 0x7f). Proven on
+// two independent pairing sessions, so the exchange is skipped by default;
+// the manual-exchange path is kept dormant for later experiments.
+static bool mtu_skip = true;  // skip ATT MTU exchange entirely
+static bool mtu_pending;      // manual exchange in flight
+
+// Setup-stage probe state: the Pro also ignores plain ATT write requests
+// (log #3), while PROTOCOL.md documents primary discovery as working with
+// bluez. Discovery doubles as an ATT-liveness probe and reveals the real
+// handle layout of this specific unit.
+static bool discovery_pending;
+static uint8_t services_seen;
 
 // Restart the single flow timer. BTstack forbids re-adding a registered
 // timer: it asserts (compiled out here) and then corrupts the timer list by
@@ -120,7 +125,7 @@ static void reset_session(void) {
     conn = 0;
     native_seen = common_seen = false;
     stream_native = false;
-    replies_ccc_done = false;
+    discovery_pending = false;
     sw2_cal_set_defaults(&sw2_cal_l);
     sw2_cal_set_defaults(&sw2_cal_r);
 }
@@ -130,7 +135,7 @@ static void start_scan(void);
 static void run_next_act(void);
 static void fatal(const char *why);
 static void setup_watchdog_cb(btstack_timer_source_t *t);
-static void start_ccc_setup(void);
+static void setup_discovery_start(void);
 static void mtu_watchdog_cb(btstack_timer_source_t *t);
 static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                                uint8_t *packet, uint16_t size);
@@ -288,7 +293,7 @@ static void cmd_timeout_cb(btstack_timer_source_t *t) {
 static void setup_watchdog_cb(btstack_timer_source_t *t) {
     (void)t;
     if (st == SW2_ST_SETUP)
-        fatal("ATT silent after connect (MTU exchange stalled?)");
+        fatal("ATT silent after connect");
 }
 
 static void send_current_act(void) {
@@ -351,8 +356,10 @@ static void send_current_act(void) {
 
     LOG("[sw2] step %u/%u %s (%02x/%02x len %u)", act_idx + 1, (unsigned)INIT_ACT_COUNT,
         a->name, a->cmd, a->subcmd, plen);
-    gatt_client_write_value_of_characteristic(
-        sw2_packet_handler, conn, SW2_HANDLE_COMMAND_VALUE, (uint16_t)(8 + plen), cmd_buf);
+    // WRITE COMMAND (no ATT response): the Pro has never been observed to
+    // answer write requests; replies arrive as notifications on 0x001a.
+    gatt_client_write_value_of_characteristic_without_response(
+        conn, SW2_HANDLE_COMMAND_VALUE, (uint16_t)(8 + plen), cmd_buf);
     timer_schedule(cmd_timeout_cb, SW2_CMD_TIMEOUT_MS);
 }
 
@@ -485,28 +492,48 @@ static void handle_input_notify(uint16_t value_handle, const uint8_t *data, uint
 // ------------------------------------------------------- packet handler
 static btstack_packet_callback_registration_t hci_cb_reg;
 
-static void enable_native_ccc(void) {
-    static uint16_t on = 0x0001;
-    LOG("[sw2] cmd-reply CCC on; enabling native CCC");
-    gatt_client_write_characteristic_descriptor_using_descriptor_handle(
-        sw2_packet_handler, conn, SW2_HANDLE_NATIVE_INPUT_CCC, 2, (uint8_t *)&on);
-}
+// ------------------------------------------------------- MTU / ATT setup
+// Setup sequence, shaped by hardware observations (logs #1-#3):
+//   * the Pro never answers an ATT Exchange MTU request
+//   * it never answers plain ATT write requests either
+//   * bluez-switch2 evidence (PROTOCOL.md 4.3): primary discovery works
+// So: probe with primary-service discovery first (also reveals the real
+// handle layout), then write CCCs as WRITE COMMANDs (no ATT response
+// expected), and run the init sequence on no-response writes as well —
+// command replies arrive as notifications on handle 0x001a anyway.
 
-// ------------------------------------------------------- MTU / CCC setup
-static void ccc_reply_write(void) {
-    static uint16_t on = 0x0001;
-    LOG("[sw2] enabling cmd-reply CCC");
-    gatt_client_write_characteristic_descriptor_using_descriptor_handle(
-        sw2_packet_handler, conn, SW2_HANDLE_COMMAND_REPLY_CCC, 2, (uint8_t *)&on);
-}
-
-// Begin the CCC handshake: cmd-reply CCC first, native CCC on its query
-// complete. Also arms the setup watchdog: if the peer ignores even plain
-// writes, bail out fast instead of waiting BTstack's 30s ATT timeout.
-static void start_ccc_setup(void) {
-    mtu_pending = false;
-    ccc_reply_write();
+static void setup_discovery_start(void) {
+    services_seen = 0;
+    discovery_pending = true;
+    LOG("[sw2] discovery probe: primary services");
+    gatt_client_discover_primary_services(sw2_packet_handler, conn);
     timer_schedule(setup_watchdog_cb, SW2_SETUP_SILENT_MS);
+}
+
+static void init_start_cb(btstack_timer_source_t *t) {
+    (void)t;
+    if (st != SW2_ST_SETUP) return;
+    LOG("[sw2] CCCs written (no-response); starting init sequence");
+    act_idx = 0;
+    st = SW2_ST_INIT;
+    send_current_act();   // step 1; replies advance via run_next_act
+}
+
+static void ccc_native_write_cb(btstack_timer_source_t *t) {
+    (void)t;
+    if (st != SW2_ST_SETUP) return;
+    static uint16_t on = 0x0001;
+    gatt_client_write_value_of_characteristic_without_response(
+        conn, SW2_HANDLE_NATIVE_INPUT_CCC, 2, (uint8_t *)&on);
+    timer_schedule(init_start_cb, 40);
+}
+
+static void ccc_write_and_init(void) {
+    static uint16_t on = 0x0001;
+    gatt_client_write_value_of_characteristic_without_response(
+        conn, SW2_HANDLE_COMMAND_REPLY_CCC, 2, (uint8_t *)&on);
+    // stagger the second write so the first has left the ACL buffer
+    timer_schedule(ccc_native_write_cb, 20);
 }
 
 static void mtu_watchdog_cb(btstack_timer_source_t *t) {
@@ -561,7 +588,7 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                     // 30s. Attempt the exchange manually once; if silent,
                     // latch mtu_skip and fall back to plain writes at MTU 23.
                     if (mtu_skip) {
-                        start_ccc_setup();
+                        setup_discovery_start();
                     } else {
                         mtu_pending = true;
                         LOG("[sw2] requesting MTU exchange");
@@ -579,9 +606,38 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
             }
             break;
 
+        case GATT_EVENT_SERVICE_QUERY_RESULT: {
+            if (st != SW2_ST_SETUP) break;
+            gatt_client_service_t svc;
+            gatt_event_service_query_result_get_service(packet, &svc);
+            services_seen++;
+            if (svc.uuid16) {
+                LOG("[sw2] svc %04x  %04x..%04x",
+                    svc.uuid16, svc.start_group_handle, svc.end_group_handle);
+            } else {
+                LOG("[sw2] svc 128b %02x%02x%02x%02x..  %04x..%04x %s",
+                    svc.uuid128[0], svc.uuid128[1], svc.uuid128[2], svc.uuid128[3],
+                    svc.start_group_handle, svc.end_group_handle,
+                    memcmp(svc.uuid128, SW2_UUID_SERVICE, 16) == 0 ? "<- Nintendo controller" : "");
+            }
+            break;
+        }
+
         case GATT_EVENT_QUERY_COMPLETE: {
             uint8_t status = gatt_event_query_complete_get_att_status(packet);
             hci_con_handle_t h = gatt_event_query_complete_get_handle(packet);
+            if (st == SW2_ST_SETUP && discovery_pending) {
+                discovery_pending = false;
+                if (status != ERROR_CODE_SUCCESS) {
+                    LOG("[sw2] discovery query status=%02x", status);
+                    fatal("discovery failed");
+                    break;
+                }
+                LOG("[sw2] discovery complete: %u service(s)%s", services_seen,
+                    services_seen ? " — ATT alive" : "");
+                ccc_write_and_init();
+                break;
+            }
             if (status != ERROR_CODE_SUCCESS) {
                 LOG("[sw2] gatt query status=%02x (con 0x%04x)", status, h);
                 if (st == SW2_ST_SETUP && mtu_pending) {
@@ -592,24 +648,8 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                     break;
                 }
                 if (st == SW2_ST_INIT) { fatal("gatt write failed"); break; }
-                // CCC writes are the setup stage: without them neither
-                // command replies nor input reports can ever arrive, so a
-                // failure here must abort the connection instead of letting
-                // the init sequence run into a guaranteed reply timeout.
-                if (st == SW2_ST_SETUP) { fatal("CCC write failed"); break; }
             }
-            if (st == SW2_ST_SETUP) {
-                if (!replies_ccc_done) {
-                    replies_ccc_done = true;
-                    enable_native_ccc();
-                } else {
-                    replies_ccc_done = false;
-                    LOG("[sw2] CCCs set; starting init sequence");
-                    act_idx = 0;
-                    st = SW2_ST_INIT;
-                    send_current_act();   // step 1; replies advance via run_next_act
-                }
-            } else if (st == SW2_ST_SWITCHING && !common_seen && !stream_native) {
+            if (st == SW2_ST_SWITCHING && !common_seen && !stream_native) {
                 // native CCC off completed -> subscribe common
                 timer_schedule(sub_common_cb, SW2_NATIVE_TO_COMMON_DELAY_MS);
             }
@@ -619,7 +659,7 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
         case GATT_EVENT_MTU:
             LOG("[sw2] ATT MTU -> %u", gatt_event_mtu_get_MTU(packet));
             mtu_pending = false;
-            if (st == SW2_ST_SETUP) start_ccc_setup();
+            if (st == SW2_ST_SETUP) setup_discovery_start();
             break;
 
         case GATT_EVENT_NOTIFICATION: {
