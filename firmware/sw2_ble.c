@@ -120,6 +120,7 @@ static void reset_session(void) {
 static void start_scan(void);
 static void run_next_act(void);
 static void fatal(const char *why);
+static void setup_watchdog_cb(btstack_timer_source_t *t);
 static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                                uint8_t *packet, uint16_t size);
 
@@ -271,6 +272,12 @@ static void wait_native_timeout_cb(btstack_timer_source_t *t) {
 static void cmd_timeout_cb(btstack_timer_source_t *t) {
     (void)t;
     if (st == SW2_ST_INIT) fatal("command reply timeout");
+}
+
+static void setup_watchdog_cb(btstack_timer_source_t *t) {
+    (void)t;
+    if (st == SW2_ST_SETUP)
+        fatal("ATT silent after connect (MTU exchange stalled?)");
 }
 
 static void send_current_act(void) {
@@ -489,12 +496,23 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
                     conn = hci_subevent_le_connection_complete_get_connection_handle(packet);
                     st = SW2_ST_SETUP;
                     LOG("[sw2] connected handle 0x%04x", conn);
-                    gap_request_connection_parameter_update(
-                        conn, SW2_CONN_INTERVAL_MIN, SW2_CONN_INTERVAL_MAX,
-                        SW2_CONN_LATENCY, SW2_CONN_SUPERVISION);
+                    // Connection params (7.5ms / 0 / 420ms) are already set for
+                    // the outgoing link by gap_set_connection_parameters(). Do
+                    // NOT send an L2CAP Connection Parameter Update Request
+                    // here: that PDU is Peripheral-only (Core Vol 3/A 4.20).
+                    // Sending it as Central is a spec violation — observed on
+                    // the Switch 2 Pro as a wedged ATT server (the auto MTU
+                    // exchange goes unanswered, every queued GATT op then
+                    // times out with 0x7f) or an instant link drop.
                     static uint16_t on = 0x0001;
+                    LOG("[sw2] enabling cmd-reply CCC");
                     gatt_client_write_characteristic_descriptor_using_descriptor_handle(
                         sw2_packet_handler, conn, SW2_HANDLE_COMMAND_REPLY_CCC, 2, (uint8_t *)&on);
+                    // If the peer never answers the (auto) MTU exchange, all
+                    // queued writes stall for BTstack's 30s ATT timeout. Bail
+                    // out early instead, so the retry loop stays fast and the
+                    // log states the cause.
+                    timer_schedule(setup_watchdog_cb, SW2_SETUP_SILENT_MS);
                 } else if (status != ERROR_CODE_SUCCESS && conn == 0) {
                     LOG("[sw2] connection attempt failed");
                     start_scan();
@@ -510,8 +528,13 @@ static void sw2_packet_handler(uint8_t packet_type, uint16_t channel,
             uint8_t status = gatt_event_query_complete_get_att_status(packet);
             hci_con_handle_t h = gatt_event_query_complete_get_handle(packet);
             if (status != ERROR_CODE_SUCCESS) {
-                LOG("[sw2] gatt query status=%02x (handle 0x%04x)", status, h);
+                LOG("[sw2] gatt query status=%02x (con 0x%04x)", status, h);
                 if (st == SW2_ST_INIT) { fatal("gatt write failed"); break; }
+                // CCC writes are the setup stage: without them neither
+                // command replies nor input reports can ever arrive, so a
+                // failure here must abort the connection instead of letting
+                // the init sequence run into a guaranteed reply timeout.
+                if (st == SW2_ST_SETUP) { fatal("CCC write failed"); break; }
             }
             if (st == SW2_ST_SETUP) {
                 if (!replies_ccc_done) {

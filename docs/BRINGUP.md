@@ -13,7 +13,7 @@
 
 1. WSL 里 `./build.sh` 确认 `build/sw2bridge.uf2` 存在
 2. 按住 BOOTSEL 插 Pico → Windows 弹出 `RPI-RP2` 盘
-3. 从 `\\wsl.localhost\<distro>\home\smy-101\workspace\self\switch2pro-bridge\build\` 拖入 uf2
+3. 从 `\\wsl.localhost\<distro>\home\smy\workspace\switch2pro-bridge\build\` 拖入 uf2(或在 WSL 里直接 `cp build/sw2bridge.uf2 /mnt/d/` 再拖)
 4. 板子自动重启,LED 开始闪烁(=扫描中)
 
 ## 2. 看日志
@@ -46,12 +46,13 @@
 ## 4. 预期日志序列(成功路径)
 
 ```
-sw2bridge v0.2 ...
+sw2bridge v0.3 ...
 [sw2] btstack up
 [sw2] scanning...
 [sw2] adv match pid=2069 rssi=-52 type=0 addr=XX:XX:...
 [sw2] connecting to XX:XX:... (pid 2069)
 [sw2] connected handle 0x00XX
+[sw2] enabling cmd-reply CCC
 [sw2] ATT MTU -> 247            ← 必须 >66,否则报告会被截断!
 [sw2] cmd-reply CCC on; enabling native CCC
 [sw2] CCCs set; starting init sequence
@@ -81,6 +82,10 @@ sw2bridge v0.2 ...
 | 一直 `scanning...`,无 adv match | 手柄没进配对模式 / 广播格式与 Joy-Con 不同 | 长按同步键;若仍无,开启 `SW2_SCAN_DEBUG` 已默认打印所有 0553 厂商数据广播,把原始 hexdump 带回来 |
 | `adv match pid=xxxx`(非 2069) | 连到了 Joy-Con 2 等其他手柄 | 正常现象(ANY_NS2 开着),或关掉宏只收 Pro |
 | `connect failed status=xx` | 控制器拒绝连接 | 记录 status 码;间隔几秒会自动重试 |
+| `connected` 后立刻 `disconnected` | 手柄主动断链(曾因 master 发 L2CAP 参数更新请求违规,已移除) | 若复现频繁,把日志带回来 |
+| `FATAL: ATT silent after connect (MTU exchange stalled?)` | 连接后 2s 内 ATT 无任何进展:手柄不应答 MTU 交换,后续写入全部被阻塞 | 每次快钔2s 重试;若持续出现,需改用「无 MTU 交换」模式联调(把日志带回来) |
+| `FATAL: CCC write failed` 或 `gatt query status=xx`(xx 为 0x01~0x1e 标准码) | CCC 写入被拒:句柄不存在/不可写 → Pro 的 GATT 布局偏移 | 记录标准码:01=句柄无效,02/03=不可读写;需改 UUID 发现代替固定句柄 |
+| `gatt query status=7f` | btstack `ATT_ERROR_TIMEOUT`:请求根本没被应答(常见于 MTU 交换挂起把队列堵死) | 修复后不应再出现;若再现说明手柄又进入不应答状态,对照上面 ATT silent 行 |
 | `ATT MTU -> 23` 或无此行、报告 len<63 | MTU 交换没发生 | 报告会截断,把日志带回来(需要在首个 GATT 操作前显式触发 MTU 交换) |
 | 某一步 `command reply timeout` | Pro 的初始化序列与 Joy-Con 有差异 | **最关键的未知数**:记录卡在第几步 + 最后一条 reply hexdump |
 | `gatt query status=02/03` | 写句柄不存在(Pro 的 GATT 布局偏移) | 需要做一次 UUID 发现代替固定句柄,把日志带回来 |
