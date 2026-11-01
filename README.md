@@ -94,7 +94,9 @@ Switch 2 Pro 的丝印是任天堂布局(右=A,下=B)。伪装成 DS4 时游戏�
 ## 为什么可行
 
 - Switch 2 手柄走 **BLE 私有协议**,且**不需要标准蓝牙配对**(扫描→连接→GATT 即用)
-- 协议已被完整逆向:`refs/linux-switch2/PROTOCOL.md`(GATT 属性表、初始化序列、报告格式)
+- 协议已被完整逆向:`refs/linux-switch2/PROTOCOL.md`(GATT 属性表、初始化序列、报告格式);
+  本仓库的摘要版见 `docs/PROTOCOL-NOTES.md`(含固件实际依赖的常量与位序,以及
+  "为什么模拟 0x2009 而不是 0x2069"的结论)
 - Valve 已把驱动合入 Linux 7.4 主线(`refs/hid-nintendo-valve.c`),含 Pro 按键映射
 - USB 侧人格化伪装参考了 [DS5_Bridge](https://github.com/SundayMoments/DS5_Bridge)(AGPL-3.0;
   本仓库复用了其 DS4 HID report descriptor 字节,故衍生部分同样受 AGPL 约束)
@@ -124,6 +126,7 @@ refs/              参考实现(git 忽略,本地保留)
   hid-nintendo-valve.c  Valve 主线内核驱动(Pro 映射/USB 侧)
   DS5_Bridge/        Pico 2 W DS4/DualSense 桥(AGPL,输出侧参考)
 docs/BRINGUP.md    到板联调手册(必读)
+docs/PROTOCOL-NOTES.md  协议速查(从 refs/ 摘录,不拉参考仓库也能查)
 build.sh           WSL 一键构建
 ```
 

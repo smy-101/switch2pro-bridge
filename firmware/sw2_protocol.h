@@ -120,8 +120,11 @@ static const uint8_t SW2_UUID_SERVICE[16] = {          // little-endian, as gatt
 #define SW2_PRO_BTN1_LS     (1u << 7)
 #define SW2_PRO_BTN2_HOME    (1u << 0)
 #define SW2_PRO_BTN2_CAPTURE (1u << 1)
-#define SW2_PRO_BTN2_GL      (1u << 2)
-#define SW2_PRO_BTN2_GR      (1u << 3)
+// linux-switch2 switch2.h: NS2_BTN_PRO_GR = BIT(2), NS2_BTN_PRO_GL = BIT(3).
+// (Bit 2 is "the side's rear button" on Joy-Con reports, which is GR on the
+// right unit and GL on the left one; on the Pro it is always GR.)
+#define SW2_PRO_BTN2_GR      (1u << 2)
+#define SW2_PRO_BTN2_GL      (1u << 3)
 #define SW2_PRO_BTN2_C       (1u << 4)
 
 // ---------------------------------------------------------------- commands
