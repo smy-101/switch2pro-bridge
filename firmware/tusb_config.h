@@ -29,7 +29,19 @@ extern "C" {
 #define CFG_TUD_ENDPOINT0_SIZE 64
 
 //------------- CLASS -------------//
+// USB serial log. It is a bring-up aid, not part of the controller persona:
+// the reference dongle ships without it. Set this to 0 for a clean
+// single-interface HID device (the config descriptor and log sink follow this
+// one switch, and so does TinyUSB itself, so they can never disagree).
+#ifndef SW2_CDC_LOG
+#define SW2_CDC_LOG 1
+#endif
+
+#if SW2_CDC_LOG
 #define CFG_TUD_CDC 1
+#else
+#define CFG_TUD_CDC 0
+#endif
 #define CFG_TUD_HID 1
 #define CFG_TUD_MSC 0
 #define CFG_TUD_MIDI 0

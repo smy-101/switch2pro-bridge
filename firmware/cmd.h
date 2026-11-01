@@ -36,7 +36,7 @@
 
 // Firmware version string returned on GET 0xF8; also used by the boot log.
 // Keep in sync with README.md 版本号 and release tags.
-#define SW2BRIDGE_VERSION "sw2bridge v0.3"
+#define SW2BRIDGE_VERSION "sw2bridge v1.6"
 
 enum {
     CMD_FUNC_SET_CONFIG = 0x01,

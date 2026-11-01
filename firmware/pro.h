@@ -27,4 +27,13 @@
 
 void pro_encode(const sw2_state_t *st, uint8_t body[PRO_INPUT_REPORT_BODY]);
 
+// Factory stick calibration lives here in the Switch 1 SPI map. Responding with
+// a synthesized blob is what lets Steam/SDL calibrate the sticks; answering
+// 0xFF makes SDL fall back to center 2048 / range 1433, which saturates the
+// physical travel at ~85%.
+#define PRO_SPI_FACTORY_STICK_CAL 0x603Du
+
+// Left 9 bytes + right 9 bytes, three packed 12-bit (x, y) pairs each.
+void pro_stick_cal_blob(uint8_t out[18]);
+
 #endif

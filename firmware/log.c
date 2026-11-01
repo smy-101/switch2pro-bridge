@@ -50,6 +50,11 @@ void log_hexdump(const char *tag, const uint8_t *data, unsigned len) {
     }
 }
 
+#if !CFG_TUD_CDC
+void log_drain(void) {
+    // No serial interface in this build; the ring just fills and drops.
+}
+#else
 void log_drain(void) {
     if (!log_cs_ready) return;
     // Keep logs in the ring until a CDC terminal is actually open, so early
@@ -72,6 +77,7 @@ void log_drain(void) {
         tud_cdc_write_flush();
     }
 }
+#endif  // CFG_TUD_CDC
 
 void log_init(void) {
     critical_section_init(&log_cs);

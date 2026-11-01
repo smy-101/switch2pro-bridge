@@ -31,7 +31,10 @@ void pro_encode(const sw2_state_t *st, uint8_t body[PRO_INPUT_REPORT_BODY]) {
 
     // unified button bytes map 1:1 (same bit order as Switch 1 standard report)
     body[2] = (uint8_t)(st->buttons & 0xff);          // U1: Y X B A SR_R SL_R R ZR
-    body[3] = (uint8_t)((st->buttons >> 8) & 0x3f);   // U2: Minus Plus RS LS Home Capture
+    // U2: Minus Plus RS LS Home Capture C. SDL only reads bit 6 (C) when the
+    // device identifies as a Switch 2 controller, so keeping it is harmless for
+    // the 0x2009 persona and lets a 0x2069 persona reuse this encoder.
+    body[3] = (uint8_t)((st->buttons >> 8) & 0x7f);
     body[4] = (uint8_t)((st->buttons >> 16) & 0xff);  // U3: Down Up Right Left SR_L SL_L L ZL
 
     // raw 12-bit sticks passthrough (host-side calibration handles the rest)
@@ -39,4 +42,15 @@ void pro_encode(const sw2_state_t *st, uint8_t body[PRO_INPUT_REPORT_BODY]) {
     pack_stick(&body[8], st->raw_rx, st->raw_ry);
 
     // [11..62] IMU / trailing pad: zero until motion support (v2)
+}
+
+void pro_stick_cal_blob(uint8_t out[18]) {
+    // SDL decodes left as {max, center, min} and right as {center, min, max},
+    // where max/min are distances measured from the center.
+    pack_stick(&out[0],  sw2_cal_l.range_pos_x, sw2_cal_l.range_pos_y);   // left max
+    pack_stick(&out[3],  sw2_cal_l.neutral_x,   sw2_cal_l.neutral_y);     // left center
+    pack_stick(&out[6],  sw2_cal_l.range_neg_x, sw2_cal_l.range_neg_y);   // left min
+    pack_stick(&out[9],  sw2_cal_r.neutral_x,   sw2_cal_r.neutral_y);     // right center
+    pack_stick(&out[12], sw2_cal_r.range_neg_x, sw2_cal_r.range_neg_y);   // right min
+    pack_stick(&out[15], sw2_cal_r.range_pos_x, sw2_cal_r.range_pos_y);   // right max
 }

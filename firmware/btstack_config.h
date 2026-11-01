@@ -3,6 +3,11 @@
 
 // sw2bridge: BLE central only (Switch 2 controller), no classic, no SMP pairing
 // (PROTOCOL.md: "Normal Bluetooth SMP pairing is not required").
+//
+// sm_init() is still required (GATT client's IRK-lookup gate), but an
+// unsolicited SMP Security Request must never auto-start pairing: the Pro
+// answers pairing with "Pairing Not Supported" and drops the link.
+#define ENABLE_EXPLICIT_PAIRING_ON_SECURITY_REQUEST 1
 
 #undef ENABLE_CLASSIC
 

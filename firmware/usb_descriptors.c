@@ -23,13 +23,25 @@ void usb_persona_set(usb_persona_t p) {
 //--------------------------------------------------------------------
 // Device descriptors (one per persona)
 //--------------------------------------------------------------------
+#if CFG_TUD_CDC
+// Composite (CDC + HID): announce IAD usage. TUD_CDC_DESCRIPTOR emits the IAD.
+#define DEV_CLASS           TUSB_CLASS_MISC
+#define DEV_SUBCLASS        MISC_SUBCLASS_COMMON
+#define DEV_PROTOCOL        MISC_PROTOCOL_IAD
+#else
+// Single HID interface: class belongs to the interface, not the device.
+#define DEV_CLASS           0
+#define DEV_SUBCLASS        0
+#define DEV_PROTOCOL        0
+#endif
+
 static const tusb_desc_device_t desc_device_pro = {
     .bLength            = sizeof(tusb_desc_device_t),
     .bDescriptorType    = TUSB_DESC_DEVICE,
     .bcdUSB             = 0x0200,
-    .bDeviceClass       = TUSB_CLASS_MISC,      // composite CDC+HID (IAD)
-    .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
-    .bDeviceProtocol    = MISC_PROTOCOL_IAD,
+    .bDeviceClass       = DEV_CLASS,
+    .bDeviceSubClass    = DEV_SUBCLASS,
+    .bDeviceProtocol    = DEV_PROTOCOL,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor           = 0x057e,               // Nintendo
     .idProduct          = 0x2009,               // Pro Controller (wired)
@@ -44,9 +56,9 @@ static const tusb_desc_device_t desc_device_ds4 = {
     .bLength            = sizeof(tusb_desc_device_t),
     .bDescriptorType    = TUSB_DESC_DEVICE,
     .bcdUSB             = 0x0200,
-    .bDeviceClass       = TUSB_CLASS_MISC,
-    .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
-    .bDeviceProtocol    = MISC_PROTOCOL_IAD,
+    .bDeviceClass       = DEV_CLASS,
+    .bDeviceSubClass    = DEV_SUBCLASS,
+    .bDeviceProtocol    = DEV_PROTOCOL,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor           = USB_VID_SONY_DS4,
     .idProduct          = USB_PID_DS4_V2,
@@ -199,21 +211,28 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
 //   EP 0x81 CDC notify | 0x02 CDC OUT | 0x82 CDC IN
 //   EP 0x83 HID IN     | 0x03 HID OUT
 //--------------------------------------------------------------------
+#if CFG_TUD_CDC
 enum {
     ITF_NUM_CDC = 0,
     ITF_NUM_CDC_DATA,
     ITF_NUM_HID,
     ITF_NUM_TOTAL
 };
+#define CONFIG_TOTAL_LEN \
+    (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
+#else
+enum {
+    ITF_NUM_HID = 0,
+    ITF_NUM_TOTAL
+};
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
+#endif
 
 #define EPNUM_CDC_NOTIF   0x81
 #define EPNUM_CDC_OUT     0x02
 #define EPNUM_CDC_IN      0x82
 #define EPNUM_HID_IN      0x83
 #define EPNUM_HID_OUT     0x03
-
-#define CONFIG_TOTAL_LEN \
-    (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
 
 // Built on demand: the embedded HID descriptor length depends on persona.
 static uint8_t desc_fs_configuration[CONFIG_TOTAL_LEN];
@@ -225,10 +244,12 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
                           CONFIG_TOTAL_LEN, 0x00, 100)},
            TUD_CONFIG_DESC_LEN);
     p += TUD_CONFIG_DESC_LEN;
+#if CFG_TUD_CDC
     memcpy(p, (uint8_t[]){TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 0, EPNUM_CDC_NOTIF, 8,
                           EPNUM_CDC_OUT, EPNUM_CDC_IN, 64)},
            TUD_CDC_DESC_LEN);
     p += TUD_CDC_DESC_LEN;
+#endif
     memcpy(p, (uint8_t[]){TUD_HID_INOUT_DESCRIPTOR(
                           ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
                           persona == USB_PERSONA_PRO

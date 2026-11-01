@@ -159,9 +159,13 @@ static const uint8_t SW2_UUID_SERVICE[16] = {          // little-endian, as gatt
 #define SW2_FEATURE_OPTICAL   0x10   // Joy-Con only
 #define SW2_FEATURE_RUMBLE    0x20
 #define SW2_FEATURE_MAGNETO   0x80
-#define SW2_FEATURE_PRO_V1 \
-    (SW2_FEATURE_BUTTONS | SW2_FEATURE_ANALOG | SW2_FEATURE_IMU | SW2_FEATURE_RUMBLE)  // 0x27
-#define SW2_FEATURE_BLE_BOOT_MASK 0x94  // IMU | optical | magneto — measured BLE preamble value
+
+// Two different masks, in this order, exactly as linux-switch2 does it
+// (switch2-init.c): the measured BLE transport preamble sends 0x94, then the
+// ordinary controller feature set 0x27 (the same value a controller enabled
+// over USB uses). Do not blend them into 0x2f — 0x08 is not a feature bit.
+#define SW2_FEATURE_BLE_PREAMBLE     0x94   // IMU | optical | magneto
+#define SW2_FEATURE_PRO_CONTROLLER   0x27   // buttons | analog | IMU | rumble
 
 // ---------------------------------------------------------------- flash
 #define SW2_FLASH_SERIAL          0x13002u  // 0x10
@@ -179,7 +183,8 @@ static const uint8_t SW2_UUID_SERVICE[16] = {          // little-endian, as gatt
 #define SW2_NATIVE_FIRST_WAIT_MS 1000
 #define SW2_COMMON_WAIT_MS      600
 #define SW2_NATIVE_TO_COMMON_DELAY_MS 250
-#define SW2_SETUP_SILENT_MS     2000    // no ATT progress right after connect => stalled MTU exchange, retry
-#define SW2_MTU_WAIT_MS         700     // manual MTU exchange attempt before falling back to MTU 23 writes
+#define SW2_SETUP_SILENT_MS     2000    // no ATT progress right after connect => rescan
+#define SW2_MTU_WAIT_MS         1500    // manual MTU exchange attempt (controller offers 512)
+#define SW2_MTU_SETTLE_MS       150     // let the controller's ATT server come up after connect
 
 #endif
